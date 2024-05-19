@@ -2,6 +2,7 @@ baseURL: https://investedobserver.com/
 languageCode: en-us
 title: Invested Observer
 theme: "PaperMod"
+enableRobotsTXT: true
 
 params:
   ShowRssButtonInSectionTermList: true
