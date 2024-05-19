@@ -1,0 +1,79 @@
+:root {
+    /* Increase content width */
+    --main-width: 920px;
+}
+
+body {
+    /* Smaller font size */
+    font-size: 16px;
+}
+
+/* Justify text */
+.post-content p {
+    text-align: justify;
+}
+
+.post-content li {
+    text-align: justify;
+}
+
+/* Add codeblock language label */
+.language-label {
+    font-family: monospace;
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    color: rgba(255, 255, 255, 0.8);
+    background: rgba(78, 78, 78, 0.8);
+    border-radius: var(--radius);
+    padding: 0 5px;
+    font-size: .7em;
+}
+
+div.highlight:hover .language-label,
+pre:hover .language-label {
+    display: none;
+}
+
+/* Fix codeblock color with border-radius */
+.post-content pre {
+    background-color: var(--theme) !important;
+}
+
+/* Change tags style */
+/* Add # before tags */
+/* Remove border and background color */
+.post-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+}
+
+.post-tags li {
+    display: inline-block;
+}
+
+.post-tags a {
+    border-radius: unset;
+    background: unset;
+    border: unset;
+}
+
+.post-tags a {
+    display: block;
+    padding: 0;
+    margin-top: 5px;
+    color: var(--secondary);
+    font-size: 14px;
+    line-height: unset;
+    background: unset;
+}
+
+.post-tags a:before {
+    content: "#";
+}
+
+.post-tags a:hover {
+    background: unset;
+    color: var(--primary)
+}

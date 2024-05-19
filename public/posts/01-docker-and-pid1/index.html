@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en" dir="auto">
+
+<head><meta charset="utf-8">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+<meta name="robots" content="index, follow">
+<title>Docker and PID 1 | Invested Observer</title>
+<meta name="keywords" content="docker, linux">
+<meta name="description" content="Exploring how non-init processes run and terminate (or not) inside the docker container running as PID 1.">
+<meta name="author" content="antontkv">
+<link rel="canonical" href="https://investedobserver.com/posts/01-docker-and-pid1/">
+<link crossorigin="anonymous" href="/assets/css/stylesheet.802eb5f6e4a35ac285ee0ec0569db22ff6608d219bfe8522cc87384e122c8aaf.css" integrity="sha256-gC619uSjWsKF7g7AVp2yL/ZgjSGb/oUizIc4ThIsiq8=" rel="preload stylesheet" as="style">
+<link rel="icon" href="https://investedobserver.com/favicon.ico">
+<link rel="icon" type="image/png" sizes="16x16" href="https://investedobserver.com/favicon-16x16.png">
+<link rel="icon" type="image/png" sizes="32x32" href="https://investedobserver.com/favicon-32x32.png">
+<link rel="apple-touch-icon" href="https://investedobserver.com/apple-touch-icon.png">
+<link rel="mask-icon" href="https://investedobserver.com/safari-pinned-tab.svg">
+<meta name="theme-color" content="#2e2e33">
+<meta name="msapplication-TileColor" content="#2e2e33">
+<link rel="alternate" hreflang="en" href="https://investedobserver.com/posts/01-docker-and-pid1/">
+<noscript>
+    <style>
+        #theme-toggle,
+        .top-link {
+            display: none;
+        }
+
+    </style>
+    <style>
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --theme: rgb(29, 30, 32);
+                --entry: rgb(46, 46, 51);
+                --primary: rgb(218, 218, 219);
+                --secondary: rgb(155, 156, 157);
+                --tertiary: rgb(65, 66, 68);
+                --content: rgb(196, 196, 197);
+                --code-block-bg: rgb(46, 46, 51);
+                --code-bg: rgb(55, 56, 62);
+                --border: rgb(51, 51, 51);
+            }
+
+            .list {
+                background: var(--theme);
+            }
+
+            .list:not(.dark)::-webkit-scrollbar-track {
+                background: 0 0;
+            }
+
+            .list:not(.dark)::-webkit-scrollbar-thumb {
+                border-color: var(--theme);
+            }
+        }
+
+    </style>
+</noscript>
+<script defer src="https://cloud.umami.is/script.js" data-website-id="3f401160-e0c6-4bf0-bf1c-5b7d8fb01561"></script>
+  
+
+<meta property="og:title" content="Docker and PID 1" />
+<meta property="og:description" content="Exploring how non-init processes run and terminate (or not) inside the docker container running as PID 1." />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="https://investedobserver.com/posts/01-docker-and-pid1/" />
+<meta property="og:image" content="https://investedobserver.com/cover.png" /><meta property="article:section" content="posts" />
+<meta property="article:published_time" content="2024-05-19T17:00:00+05:00" />
+<meta property="article:modified_time" content="2024-05-19T17:00:00+05:00" />
+
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:image" content="https://investedobserver.com/cover.png" />
+<meta name="twitter:title" content="Docker and PID 1"/>
+<meta name="twitter:description" content="Exploring how non-init processes run and terminate (or not) inside the docker container running as PID 1."/>
+
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {
+      "@type": "ListItem",
+      "position":  1 ,
+      "name": "Posts",
+      "item": "https://investedobserver.com/posts/"
+    }, 
+    {
+      "@type": "ListItem",
+      "position":  2 ,
+      "name": "Docker and PID 1",
+      "item": "https://investedobserver.com/posts/01-docker-and-pid1/"
+    }
+  ]
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "Docker and PID 1",
+  "name": "Docker and PID 1",
+  "description": "Exploring how non-init processes run and terminate (or not) inside the docker container running as PID 1.",
+  "keywords": [
+    "docker", "linux"
+  ],
+  "articleBody": "1. Intro When you run your program inside Docker, you probably sometimes notice that it takes a long time to stop. You probably even found out that this is because docker stop first sends SIGTERM to the process inside the container, and after a timeout of 10 seconds, it sends SIGKILL.\nAt this point, you probably followed instructions in the documentation by installing an init system like tini or by declaring a handler for the SIGTERM signal in your program.\nI also did that, but for some reason, I kept wondering “Why?”. Why do you have to declare a handler or use the init system? My simple Python script terminates fine with the SIGTERM signal when I run it outside the container.\nBy searching the Internet some more, I found out that processes with PID 1 are unique in Linux. One (1) is exactly the number of the process that the program starts with inside the container. This program and the PID 1 itself are usually called the init process. The Internet told me that the init process ignores SIGTERM if it does not have a handler for it. But I could not find anywhere, answers to these questions:\nHow does the init process ignore signals? Why Docker still could terminate it by sending a SIGKILL signal? Why I can’t terminate the init process by sending a SIGKILL signal with the command sudo kill -s SIGKILL 1? I guess this is why they call it open source so that you can open the source and find out for yourself.\n2. Understanding how Linux protects processes with PID 1 When the Linux kernel boots it starts one process in userland called init, which will always get PID 1. The job of this init process is to:\nStart other processes Be the ancestor (direct or indirect) of all processes Adopt orphaned processes Terminate all processes on shutdown By looking at the source code of the Linux kernel here is a TLDR of how the kernel sends signals to PID 1:\nThe init process will not receive any signal unless it explicitly creates a handler for this signal. For example, if you send SIGTERM to PID 1 process, that didn’t create a handler for this signal, the OS will not send this signal and never terminate the process by default. So this isn’t the case that PID 1 processes ignore signals, it’s that they never receive them in the first place. The init process will never receive SIGKILL or SIGSTOP unless it comes from the ancestor namespace. This means that command sudo kill -s SIGKILL 1 didn’t work only because it came from the namespace of the init process itself. Docker can kill it because it sends SIGKILL from the parent namespace. 2.1. Looking under the hood This is the section where I just describe what happens in the code, and it can be skipped.\nAt the time of research, the latest stable version of Linux is 6.1, so we will examine the source code of this version.\nLinux starts the init process in /init/main.c in the rest_init function. We are interested in line 694 which passes the kernel_init function (which starts the init process) as an argument to the function user_mode_thread from /kernel/fork.c that starts a process in user mode. user_mode_thread in line 2747 invokes the kernel_clone function. kernel_clone in line 2671 invokes the copy_process function. copy_process is a big function, but in line 2443 it sets the SIGNAL_UNKILLABLE flag for the process that passes the is_child_reaper check. is_child_reaper is a function in include/linux/pid.h that checks if the process has PID 1 in its own namespace. Now that PID 1 has the SIGNAL_UNKILLABLE flag, let’s see how signals behave when this flag is set. All functions are contained in one file /kernel/signal.c.\nWe start with the send_signal_locked function. It sets the bool force variable. We’ll note that in lines 1247-1251, it sets force to true if the signal coming from the ancestor namespace. Then it calls the __send_signal_locked function. __send_signal_locked function in line 1090 will not send the signal to the process if the prepare_signal function returns false. prepare_signal function in line 970 will return false if the sig_ignored function will return true. sig_ignored will return true if the sig_task_ignored function will return true. sig_task_ignored function in lines 89-91 will return true if three conditions are met: unlikely(t-\u003esignal-\u003eflags \u0026 SIGNAL_UNKILLABLE) - if process has the SIGNAL_UNKILLABLE flag set. handler == SIG_DFL - if the handler for a signal is the default handler, meaning the process didn’t register a handler. !(force \u0026\u0026 sig_kernel_only(sig)) - if this expression is false force variable set to false sig_kernel_only(sig) signal should be not SIGKILL or SIGSTOP So there are multiple outcomes: The signal is not SIGKILL or SIGSTOP, so this check sig_kernel_only(sig) will return false, so the force variable is irrelevant. Since the whole expression will be false. If the signal is SIGKILL or SIGSTOP, then force is relevant. If it is set to true, meaning that the signal coming from the ancestor namespace, the whole expression will be true and the signal will be sent. If it is false, meaning that the signal coming from the current namespace, the whole expression will be false and the signal will be ignored. 3. How that relates to Docker Docker runs processes in namespaces, and the first process created gets PID 1 in its own namespace. PID 1 is special in Linux. When the command docker stop is run, it will send SIGTERM to the PID 1 inside the container. So if the process doesn’t have a handler for SIGTERM, it will not receive it. Docker will wait for 10 seconds and then send SIGKILL. Since that signal will be coming from the ancestor namespace, it will be sent to PID 1 inside the container, and it will be “violently” killed.\nAnd even if the process handles SIGTERM, it could spawn children. The parent process should propagate SIGTERM to its children. So the process with PID 1 inside the container should take the role of the init process on top of its core functions.\nNot every container should have some kind of init process. You could handle SIGTERM (or you don’t mind your process of being killed with SIGKILL) and don’t spawn any children. But you probably would want some kind of init process. For that, for example, you can use tini and use -g argument with it to propagate SIGTERM to all processes inside the container.\n",
+  "wordCount" : "1078",
+  "inLanguage": "en",
+  "image":"https://investedobserver.com/cover.png","datePublished": "2024-05-19T17:00:00+05:00",
+  "dateModified": "2024-05-19T17:00:00+05:00",
+  "author":{
+    "@type": "Person",
+    "name": "antontkv"
+  },
+  "mainEntityOfPage": {
+    "@type": "WebPage",
+    "@id": "https://investedobserver.com/posts/01-docker-and-pid1/"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Invested Observer",
+    "logo": {
+      "@type": "ImageObject",
+      "url": "https://investedobserver.com/favicon.ico"
+    }
+  }
+}
+</script>
+</head>
+
+<body class="" id="top">
+<script>
+    if (localStorage.getItem("pref-theme") === "dark") {
+        document.body.classList.add('dark');
+    } else if (localStorage.getItem("pref-theme") === "light") {
+        document.body.classList.remove('dark')
+    } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        document.body.classList.add('dark');
+    }
+
+</script>
+
+<header class="header">
+    <nav class="nav">
+        <div class="logo">
+            <a href="https://investedobserver.com/" accesskey="h" title="Invested Observer (Alt + H)">Invested Observer</a>
+            <div class="logo-switches">
+                <button id="theme-toggle" accesskey="t" title="(Alt + T)">
+                    <svg id="moon" xmlns="http://www.w3.org/2000/svg" width="24" height="18" viewBox="0 0 24 24"
+                        fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                        stroke-linejoin="round">
+                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                    </svg>
+                    <svg id="sun" xmlns="http://www.w3.org/2000/svg" width="24" height="18" viewBox="0 0 24 24"
+                        fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                        stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="5"></circle>
+                        <line x1="12" y1="1" x2="12" y2="3"></line>
+                        <line x1="12" y1="21" x2="12" y2="23"></line>
+                        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                        <line x1="1" y1="12" x2="3" y2="12"></line>
+                        <line x1="21" y1="12" x2="23" y2="12"></line>
+                        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+                    </svg>
+                </button>
+            </div>
+        </div>
+        <ul id="menu">
+            <li>
+                <a href="https://investedobserver.com/tags" title="Tags">
+                    <span>Tags</span>
+                </a>
+            </li>
+            <li>
+                <a href="https://investedobserver.com/archives" title="Archive">
+                    <span>Archive</span>
+                </a>
+            </li>
+            <li>
+                <a href="https://github.com/antontkv" title="Contact">
+                    <span>Contact</span>&nbsp;
+                    <svg fill="none" shape-rendering="geometricPrecision" stroke="currentColor" stroke-linecap="round"
+                        stroke-linejoin="round" stroke-width="2.5" viewBox="0 0 24 24" height="12" width="12">
+                        <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"></path>
+                        <path d="M15 3h6v6"></path>
+                        <path d="M10 14L21 3"></path>
+                    </svg>
+                </a>
+            </li>
+        </ul>
+    </nav>
+</header>
+<main class="main">
+
+<article class="post-single">
+  <header class="post-header">
+    <div class="breadcrumbs"><a href="https://investedobserver.com/">Home</a>&nbsp;»&nbsp;<a href="https://investedobserver.com/posts/">Posts</a></div>
+    <h1 class="post-title entry-hint-parent">
+      Docker and PID 1
+    </h1> 
+    <div class="post-description">
+      Exploring how non-init processes run and terminate (or not) inside the docker container running as PID 1. 
+    </div>
+    <div class="post-meta"><span title='2024-05-19 17:00:00 +0500 +05'>May 19, 2024</span>&nbsp;·&nbsp;6 min&nbsp;·&nbsp;antontkv
+
+
+    </div>
+    
+    <div>
+      <ul class="post-tags">
+        <li><a href="https://investedobserver.com/tags/docker/">Docker</a></li>
+        <li><a href="https://investedobserver.com/tags/linux/">Linux</a></li>
+      </ul>
+    </div>
+    
+  </header> 
+<figure class="entry-cover">
+        <img loading="eager" srcset="https://investedobserver.com/posts/01-docker-and-pid1/cover_hu8b68ca5378734f57a353e4e3e0606000_23845_360x0_resize_box_3.png 360w ,https://investedobserver.com/posts/01-docker-and-pid1/cover_hu8b68ca5378734f57a353e4e3e0606000_23845_480x0_resize_box_3.png 480w ,https://investedobserver.com/posts/01-docker-and-pid1/cover_hu8b68ca5378734f57a353e4e3e0606000_23845_720x0_resize_box_3.png 720w ,https://investedobserver.com/posts/01-docker-and-pid1/cover.png 880w" 
+            sizes="(min-width: 768px) 720px, 100vw" src="https://investedobserver.com/posts/01-docker-and-pid1/cover.png" alt="" 
+            width="880" height="560">
+        
+</figure><div class="toc">
+    <details >
+        <summary accesskey="c" title="(Alt + C)">
+            <span class="details">Table of Contents</span>
+        </summary>
+
+        <div class="inner"><ul>
+                <li>
+                    <a href="#1-intro" aria-label="1. Intro">1. Intro</a></li>
+                <li>
+                    <a href="#2-understanding-how-linux-protects-processes-with-pid-1" aria-label="2. Understanding how Linux protects processes with PID 1">2. Understanding how Linux protects processes with PID 1</a><ul>
+                        
+                <li>
+                    <a href="#21-looking-under-the-hood" aria-label="2.1. Looking under the hood">2.1. Looking under the hood</a></li></ul>
+                </li>
+                <li>
+                    <a href="#3-how-that-relates-to-docker" aria-label="3. How that relates to Docker">3. How that relates to Docker</a>
+                </li>
+            </ul>
+        </div>
+    </details>
+</div>
+
+  <div class="post-content"><h2 id="1-intro">1. Intro<a hidden class="anchor" aria-hidden="true" href="#1-intro">#</a></h2>
+<p>When you run your program inside Docker, you probably sometimes notice that it takes a long time to stop. You probably even found out that this is <a href="https://docs.docker.com/compose/faq/#why-do-my-services-take-10-seconds-to-recreate-or-stop">because</a> <code>docker stop</code> first sends <code>SIGTERM</code> to the process inside the container, and after a timeout of 10 seconds, it sends <code>SIGKILL</code>.</p>
+<p>At this point, you probably followed instructions in the documentation by installing an init system like <a href="https://github.com/krallin/tini">tini</a> or by declaring a handler for the <code>SIGTERM</code> signal in your program.</p>
+<p>I also did that, but for some reason, I kept wondering &ldquo;Why?&rdquo;. Why do you have to declare a handler or use the init system? My simple Python script terminates fine with the <code>SIGTERM</code> signal when I run it outside the container.</p>
+<p>By searching the Internet some more, I found out that processes with PID 1 are unique in Linux. One (1) is exactly the number of the process that the program starts with inside the container. This program and the PID 1 itself are usually called the init process. The Internet told me that the init process ignores <code>SIGTERM</code> if it does not have a handler for it. But I could not find anywhere, answers to these questions:</p>
+<ul>
+<li>How does the init process ignore signals?</li>
+<li>Why Docker still could terminate it by sending a <code>SIGKILL</code> signal?</li>
+<li>Why I can&rsquo;t terminate the init process by sending a <code>SIGKILL</code> signal with the command <code>sudo kill -s SIGKILL 1</code>?</li>
+</ul>
+<p>I guess this is why they call it open source so that you can open the source and find out for yourself.</p>
+<h2 id="2-understanding-how-linux-protects-processes-with-pid-1">2. Understanding how Linux protects processes with PID 1<a hidden class="anchor" aria-hidden="true" href="#2-understanding-how-linux-protects-processes-with-pid-1">#</a></h2>
+<p>When the Linux kernel boots it starts one process in userland called init, which will always get PID 1. The job of this init process is to:</p>
+<ul>
+<li>Start other processes</li>
+<li>Be the ancestor (direct or indirect) of all processes</li>
+<li>Adopt orphaned processes</li>
+<li>Terminate all processes on shutdown</li>
+</ul>
+<p>By looking at the source code of the Linux kernel here is a TLDR of how the kernel sends signals to PID 1:</p>
+<ul>
+<li>The init process will not receive any signal unless it explicitly creates a handler for this signal. For example, if you send <code>SIGTERM</code> to PID 1 process, that didn&rsquo;t create a handler for this signal, the OS will not send this signal and never terminate the process by default. So this isn&rsquo;t the case that PID 1 processes ignore signals, it&rsquo;s that they never receive them in the first place.</li>
+<li>The init process will never receive <code>SIGKILL</code> or <code>SIGSTOP</code> unless it comes from the ancestor namespace. This means that command <code>sudo kill -s SIGKILL 1</code> didn&rsquo;t work only because it came from the namespace of the init process itself. Docker can kill it because it sends <code>SIGKILL</code> from the parent namespace.</li>
+</ul>
+<h3 id="21-looking-under-the-hood">2.1. Looking under the hood<a hidden class="anchor" aria-hidden="true" href="#21-looking-under-the-hood">#</a></h3>
+<p>This is the section where I just describe what happens in the code, and it can be skipped.</p>
+<p>At the time of research, the latest stable version of Linux is 6.1, so we will examine the source code of this version.</p>
+<ul>
+<li>Linux starts the init process in <code>/init/main.c</code> in the <a href="https://github.com/torvalds/linux/blob/v6.1/init/main.c#L683-L730">rest_init</a> function.</li>
+<li>We are interested in <a href="https://github.com/torvalds/linux/blob/v6.1/init/main.c#L694">line 694</a> which passes the <code>kernel_init</code> function (which starts the init process) as an argument to the function <a href="https://github.com/torvalds/linux/blob/v6.1/kernel/fork.c#L2737-L2748">user_mode_thread</a> from <code>/kernel/fork.c</code> that starts a process in user mode.</li>
+<li><code>user_mode_thread</code> in <a href="https://github.com/torvalds/linux/blob/v6.1/kernel/fork.c#L2747">line 2747</a> invokes the <a href="https://github.com/torvalds/linux/blob/v6.1/kernel/fork.c#L2630-L2715">kernel_clone</a> function.</li>
+<li><code>kernel_clone</code> in <a href="https://github.com/torvalds/linux/blob/v6.1/kernel/fork.c#L2671">line 2671</a> invokes the  <a href="https://github.com/torvalds/linux/blob/v6.1/kernel/fork.c#L1988-L2557">copy_process</a> function.</li>
+<li><code>copy_process</code> is a big function, but in <a href="https://github.com/torvalds/linux/blob/v6.1/kernel/fork.c#L2443">line 2443</a> it sets the <code>SIGNAL_UNKILLABLE</code> flag for the process that passes the <code>is_child_reaper</code> check.</li>
+<li><a href="https://github.com/torvalds/linux/blob/v6.1/include/linux/pid.h#L165-L168">is_child_reaper</a> is a function in <code>include/linux/pid.h</code> that checks if the process has PID 1 in its own namespace.</li>
+</ul>
+<p>Now that PID 1 has the <code>SIGNAL_UNKILLABLE</code> flag, let&rsquo;s see how signals behave when this flag is set. All functions are contained in one file <code>/kernel/signal.c</code>.</p>
+<ul>
+<li>We start with the <a href="https://github.com/torvalds/linux/blob/v6.1/kernel/signal.c#L1220-L1254">send_signal_locked</a> function. It sets the bool <code>force</code> variable. We&rsquo;ll note that in <a href="https://github.com/torvalds/linux/blob/v6.1/kernel/signal.c#L1247-L1251">lines 1247-1251</a>, it sets <code>force</code> to true if the signal coming from the ancestor namespace. Then it calls the <code>__send_signal_locked</code> function.</li>
+<li><a href="https://github.com/torvalds/linux/blob/v6.1/kernel/signal.c#L1079-L1194">__send_signal_locked</a> function in <a href="https://github.com/torvalds/linux/blob/v6.1/kernel/signal.c#L1090">line 1090</a> will not send the signal to the process if the <code>prepare_signal</code> function returns false.</li>
+<li><a href="https://github.com/torvalds/linux/blob/v6.1/kernel/signal.c#L906-L971">prepare_signal</a> function in <a href="https://github.com/torvalds/linux/blob/v6.1/kernel/signal.c#L970">line 970</a> will return false if the <code>sig_ignored</code> function will return true.</li>
+<li><a href="https://github.com/torvalds/linux/blob/v6.1/kernel/signal.c#L101-L120">sig_ignored</a> will return true if the <code>sig_task_ignored</code> function will return true.</li>
+<li><a href="https://github.com/torvalds/linux/blob/v6.1/kernel/signal.c#L79-L99">sig_task_ignored</a> function in <a href="https://github.com/torvalds/linux/blob/v6.1/kernel/signal.c#L89-L91">lines 89-91</a> will return true if three conditions are met:
+<ul>
+<li><code>unlikely(t-&gt;signal-&gt;flags &amp; SIGNAL_UNKILLABLE)</code> - if process has the <code>SIGNAL_UNKILLABLE</code> flag set.</li>
+<li><code>handler == SIG_DFL</code> - if the handler for a signal is the default handler, meaning the process didn&rsquo;t register a handler.</li>
+<li><code>!(force &amp;&amp; sig_kernel_only(sig))</code> - if this expression is false
+<ul>
+<li><code>force</code> variable set to false</li>
+<li><code>sig_kernel_only(sig)</code> signal should be not <code>SIGKILL</code> or <code>SIGSTOP</code></li>
+<li>So there are multiple outcomes:
+<ul>
+<li>The signal <strong>is not</strong> <code>SIGKILL</code> or <code>SIGSTOP</code>, so this check <code>sig_kernel_only(sig)</code> will return false, so the <code>force</code> variable is irrelevant. Since the whole expression will be false.</li>
+<li>If the signal <strong>is</strong> <code>SIGKILL</code> or <code>SIGSTOP</code>, then <code>force</code> is relevant. If it is set to true, meaning that the signal coming from the ancestor namespace, the whole expression will be true and the signal will be sent. If it is false, meaning that the signal coming from the current namespace, the whole expression will be false and the signal will be ignored.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h2 id="3-how-that-relates-to-docker">3. How that relates to Docker<a hidden class="anchor" aria-hidden="true" href="#3-how-that-relates-to-docker">#</a></h2>
+<p>Docker runs processes in namespaces, and the first process created gets PID 1 in its own namespace. PID 1 is special in Linux. When the command <code>docker stop</code> is run, it will send <code>SIGTERM</code> to the PID 1 inside the container. So if the process doesn&rsquo;t have a handler for <code>SIGTERM</code>, it will not receive it. Docker will wait for 10 seconds and then send <code>SIGKILL</code>. Since that signal will be coming from the ancestor namespace, it will be sent to PID 1 inside the container, and it will be &ldquo;violently&rdquo; killed.</p>
+<p>And even if the process handles <code>SIGTERM</code>, it could spawn children. The parent process should propagate <code>SIGTERM</code> to its children. So the process with PID 1 inside the container should take the role of the init process on top of its core functions.</p>
+<p>Not every container should have some kind of init process. You could handle <code>SIGTERM</code> (or you don&rsquo;t mind your process of being killed with <code>SIGKILL</code>) and don&rsquo;t spawn any children. But you probably would want some kind of init process. For that, for example, you can use <a href="https://github.com/krallin/tini">tini</a> and use <code>-g</code> argument with it to propagate <code>SIGTERM</code> to all processes inside the container.</p>
+
+
+  </div>
+
+  <footer class="post-footer">
+    
+  </footer>
+</article>
+    </main>
+    
+<footer class="footer">
+        <span>&copy; 2024 <a href="https://investedobserver.com/">Invested Observer</a></span> · 
+
+    <span>
+        Powered by
+        <a href="https://gohugo.io/" rel="noopener noreferrer" target="_blank">Hugo</a> &
+        <a href="https://github.com/adityatelange/hugo-PaperMod/" rel="noopener" target="_blank">PaperMod</a>
+    </span>
+</footer>
+<a href="#top" aria-label="go to top" title="Go to Top (Alt + G)" class="top-link" id="top-link" accesskey="g">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 6" fill="currentColor">
+        <path d="M12 6H0l6-6z" />
+    </svg>
+</a>
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    
+    var codeBlocks = document.querySelectorAll('pre code');
+
+    codeBlocks.forEach(function(code) {
+    
+    var lang = code.getAttribute("data-lang");
+
+    if (lang) {
+        
+        var label = document.createElement('span');
+        label.textContent = lang
+        label.className = 'language-label';
+
+        
+        code.parentNode.insertBefore(label, code);
+    }
+    });
+});
+</script>
+
+
+<script>
+    let menu = document.getElementById('menu')
+    if (menu) {
+        menu.scrollLeft = localStorage.getItem("menu-scroll-position");
+        menu.onscroll = function () {
+            localStorage.setItem("menu-scroll-position", menu.scrollLeft);
+        }
+    }
+
+    document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+        anchor.addEventListener("click", function (e) {
+            e.preventDefault();
+            var id = this.getAttribute("href").substr(1);
+            if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+                document.querySelector(`[id='${decodeURIComponent(id)}']`).scrollIntoView({
+                    behavior: "smooth"
+                });
+            } else {
+                document.querySelector(`[id='${decodeURIComponent(id)}']`).scrollIntoView();
+            }
+            if (id === "top") {
+                history.replaceState(null, null, " ");
+            } else {
+                history.pushState(null, null, `#${id}`);
+            }
+        });
+    });
+
+</script>
+<script>
+    var mybutton = document.getElementById("top-link");
+    window.onscroll = function () {
+        if (document.body.scrollTop > 800 || document.documentElement.scrollTop > 800) {
+            mybutton.style.visibility = "visible";
+            mybutton.style.opacity = "1";
+        } else {
+            mybutton.style.visibility = "hidden";
+            mybutton.style.opacity = "0";
+        }
+    };
+
+</script>
+<script>
+    document.getElementById("theme-toggle").addEventListener("click", () => {
+        if (document.body.className.includes("dark")) {
+            document.body.classList.remove('dark');
+            localStorage.setItem("pref-theme", 'light');
+        } else {
+            document.body.classList.add('dark');
+            localStorage.setItem("pref-theme", 'dark');
+        }
+    })
+
+</script>
+<script>
+    document.querySelectorAll('pre > code').forEach((codeblock) => {
+        const container = codeblock.parentNode.parentNode;
+
+        const copybutton = document.createElement('button');
+        copybutton.classList.add('copy-code');
+        copybutton.innerHTML = 'copy';
+
+        function copyingDone() {
+            copybutton.innerHTML = 'copied!';
+            setTimeout(() => {
+                copybutton.innerHTML = 'copy';
+            }, 2000);
+        }
+
+        copybutton.addEventListener('click', (cb) => {
+            if ('clipboard' in navigator) {
+                navigator.clipboard.writeText(codeblock.textContent);
+                copyingDone();
+                return;
+            }
+
+            const range = document.createRange();
+            range.selectNodeContents(codeblock);
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(range);
+            try {
+                document.execCommand('copy');
+                copyingDone();
+            } catch (e) { };
+            selection.removeRange(range);
+        });
+
+        if (container.classList.contains("highlight")) {
+            container.appendChild(copybutton);
+        } else if (container.parentNode.firstChild == container) {
+            
+        } else if (codeblock.parentNode.parentNode.parentNode.parentNode.parentNode.nodeName == "TABLE") {
+            
+            codeblock.parentNode.parentNode.parentNode.parentNode.parentNode.appendChild(copybutton);
+        } else {
+            
+            codeblock.parentNode.appendChild(copybutton);
+        }
+    });
+</script>
+</body>
+
+</html>

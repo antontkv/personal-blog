@@ -1,0 +1,22 @@
+<!-- Add code label to codeblocks -->
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    // Select all pre elements that contain a code element
+    var codeBlocks = document.querySelectorAll('pre code');
+
+    codeBlocks.forEach(function(code) {
+    // Get the class attribute, which includes the language
+    var lang = code.getAttribute("data-lang");
+
+    if (lang) {
+        // Create a label element
+        var label = document.createElement('span');
+        label.textContent = lang
+        label.className = 'language-label';
+
+        // Insert the label before the code in the pre element
+        code.parentNode.insertBefore(label, code);
+    }
+    });
+});
+</script>

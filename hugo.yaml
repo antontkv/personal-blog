@@ -1,0 +1,39 @@
+baseURL: https://investedobserver.com/
+languageCode: en-us
+title: Invested Observer
+theme: "PaperMod"
+
+params:
+  ShowRssButtonInSectionTermList: true
+  author: antontkv
+  keywords:
+    - blog
+  ShowCodeCopyButtons: true
+  disableSpecial1stPost: true
+  showtoc: true
+  ShowBreadCrumbs: true
+  ShowReadingTime: true
+  assets:
+    disableHLJS: true
+
+outputs:
+  home:
+    - HTML
+    - RSS
+
+menu:
+  main:
+    - name: Tags
+      url: /tags
+      weight: 1
+    - name: Archive
+      url: /archives
+      weight: 2
+    - name: Contact
+      weight: 10
+      url: https://github.com/antontkv
+
+markup:
+  highlight:
+    codeFences: true
+    style: monokai
